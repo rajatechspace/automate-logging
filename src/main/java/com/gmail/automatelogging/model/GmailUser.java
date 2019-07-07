@@ -1,11 +1,10 @@
 package com.gmail.automatelogging.model;
 
+import lombok.Data;
 import lombok.Getter;
 import lombok.Setter;
 
-@Getter
-@Setter
-
+@Data
 public class GmailUser {
 
     private String username;
