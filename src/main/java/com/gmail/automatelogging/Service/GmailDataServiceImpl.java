@@ -3,204 +3,137 @@ package com.gmail.automatelogging.Service;
 import com.gmail.automatelogging.model.GmailUser;
 import com.gmail.automatelogging.model.ScrapeData;
 import com.gmail.automatelogging.model.ScrapeUserData;
+import com.gmail.automatelogging.repository.ScrapeDataRepository;
 import com.gmail.automatelogging.repository.ScrapeRepositoryImpl;
-import java.io.BufferedReader;
-import java.io.DataOutputStream;
-import java.io.InputStreamReader;
-import java.io.UnsupportedEncodingException;
-import java.net.CookieHandler;
-import java.net.CookieManager;
-import java.net.URL;
-import java.net.URLEncoder;
-import java.util.ArrayList;
-import java.util.List;
-import javax.net.ssl.HttpsURLConnection;
 import lombok.extern.slf4j.Slf4j;
-import org.jsoup.Jsoup;
-import org.jsoup.nodes.Document;
-import org.jsoup.nodes.Element;
-import org.jsoup.select.Elements;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
+
+import javax.mail.*;
+import java.util.*;
 
 @Slf4j
 @Service
 public class GmailDataServiceImpl implements GmailDataService {
 
-  @Autowired
-  private ScrapeRepositoryImpl scrapeRepository;
+    @Autowired
+    private ScrapeRepositoryImpl scrapeRepository;
 
-  List<String> cookies;
-  HttpsURLConnection conn;
-  final String USER_AGENT = "Mozilla/5.0";
+    @Autowired
+    private ScrapeDataRepository scrapeDataRepository;
 
-  @Override
-  public String getScrapeData(GmailUser gmailUser) throws Exception {
 
-    String url = "https://accounts.google.com/ServiceLoginAuth";
-    String gmail = "https://mail.google.com/mail/";
+    private static String STORE = "imap.gmail.com";
+    private static String FOLDER = "[Gmail]/All Mail";
 
-    // make sure cookies is turn on
-    CookieHandler.setDefault(new CookieManager());
+    /* select addresses to extract */
+    private static Boolean GETFROM = true;
+    private static Boolean GETTO = true;
+    private static Boolean GETCC = false;
+    private static Boolean GETBCC = false;
 
-    // 1. Send a "GET" request, so that you can extract the form's data.
-    String page = GetPageContent(url);
-    String postParams = getFormParams(page, gmailUser.getUsername(), gmailUser.getPassword());
+    /* select addresses to filter */
+    private static Boolean FILTER_FROM = true;
+    private static Boolean FILTER_TO = false;
 
-    // 2. Construct above post's content and then send a POST request for
-    // authentication
-    sendPost(url, postParams);
+    /* filter addresses to extract */
+    private static String addressFilter[] = {
+            "noreply@", "no-reply@", "no.reply@", "donotreply@", "do_not_reply@", "webmaster@",
+            "Gaming", "Fiesta", "Replica", "VIAGRA", "Watches", "Cialis"
+            /* your filters here ... */
+    };
 
-    // 3. success then go to gmail.
-    String result = GetPageContent(gmail);
-    System.out.println(result);
+    @Override
+    public String getScrapeData(GmailUser gmailUser) throws Exception {
 
-    return result;
+        String user = gmailUser.getUsername();
+        String password = gmailUser.getPassword();
+        Properties props = System.getProperties();
+        props.setProperty("mail.store.protocol", "imaps");
 
-  }
+        try {
+            Session session = Session.getDefaultInstance(props, null);
+            Store store = session.getStore("imaps");
+            store.connect(STORE, user, password);
 
-  private void sendPost(String url, String postParams) throws Exception {
+            // Choose folder to work in
+            Folder myfolder = store.getFolder(FOLDER);
+            myfolder.open(Folder.READ_ONLY);
 
-    URL obj = new URL(url);
-    conn = (HttpsURLConnection) obj.openConnection();
+            Message messages[] = myfolder.getMessages();
+            List<ScrapeData> scrapeDataList = new ArrayList<>();
 
-    // Acts like a browser
-    conn.setUseCaches(false);
-    conn.setRequestMethod("POST");
-    conn.setRequestProperty("Host", "accounts.google.com");
-    conn.setRequestProperty("User-Agent", USER_AGENT);
-    conn.setRequestProperty("Accept",
-        "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
-    conn.setRequestProperty("Accept-Language", "en-US,en;q=0.5");
-    for (String cookie : this.cookies) {
-      conn.addRequestProperty("Cookie", cookie.split(";", 1)[0]);
-    }
-    conn.setRequestProperty("Connection", "keep-alive");
-    conn.setRequestProperty("Referer", "https://accounts.google.com/ServiceLoginAuth");
-    conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
-    conn.setRequestProperty("Content-Length", Integer.toString(postParams.length()));
+            for (int i = 0; i < messages.length; i++) {
+                Message message = messages[i];
+                if (GETFROM) {
+                    Address fromAddresses[] = message.getFrom();
+                    ScrapeData myData = new ScrapeData();
+                    addAddresses(fromAddresses, FILTER_FROM, myData);
+                    if (!StringUtils.isEmpty(myData.getSender())) {
+                        myData.setSubject(message.getSubject());
+                        scrapeDataList.add(myData);
+                    }
 
-    conn.setDoOutput(true);
-    conn.setDoInput(true);
+                }
+            }
 
-    // Send post request
-    DataOutputStream wr = new DataOutputStream(conn.getOutputStream());
-    wr.writeBytes(postParams);
-    wr.flush();
-    wr.close();
+            scrapeDataRepository.saveAll(scrapeDataList);
+            System.out.println("***** Data Saved Successfully *******");
 
-    int responseCode = conn.getResponseCode();
-    System.out.println("\nSending 'POST' request to URL : " + url);
-    System.out.println("Post parameters : " + postParams);
-    System.out.println("Response Code : " + responseCode);
+        } catch (NoSuchProviderException e) {
+            e.printStackTrace();
+            System.exit(1);
+        } catch (MessagingException e) {
+            e.printStackTrace();
+            System.exit(2);
+        }
 
-    BufferedReader in =
-        new BufferedReader(new InputStreamReader(conn.getInputStream()));
-    String inputLine;
-    StringBuffer response = new StringBuffer();
+        System.out.println("Writing collected addresses to file.");
+        return null;
 
-    while ((inputLine = in.readLine()) != null) {
-      response.append(inputLine);
-    }
-    in.close();
-    // System.out.println(response.toString());
-
-  }
-
-  private String GetPageContent(String url) throws Exception {
-
-    URL obj = new URL(url);
-    conn = (HttpsURLConnection) obj.openConnection();
-
-    // default is GET
-    conn.setRequestMethod("GET");
-
-    conn.setUseCaches(false);
-
-    // act like a browser
-    conn.setRequestProperty("User-Agent", USER_AGENT);
-    conn.setRequestProperty("Accept",
-        "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
-    conn.setRequestProperty("Accept-Language", "en-US,en;q=0.5");
-    if (cookies != null) {
-      for (String cookie : this.cookies) {
-        conn.addRequestProperty("Cookie", cookie.split(";", 1)[0]);
-      }
-    }
-    int responseCode = conn.getResponseCode();
-    System.out.println("\nSending 'GET' request to URL : " + url);
-    System.out.println("Response Code : " + responseCode);
-
-    BufferedReader in =
-        new BufferedReader(new InputStreamReader(conn.getInputStream()));
-    String inputLine;
-    StringBuffer response = new StringBuffer();
-
-    while ((inputLine = in.readLine()) != null) {
-      response.append(inputLine);
-    }
-    in.close();
-
-    // Get the response cookies
-    setCookies(conn.getHeaderFields().get("Set-Cookie"));
-
-    return response.toString();
-
-  }
-
-  public String getFormParams(String html, String username, String password)
-      throws UnsupportedEncodingException {
-
-    System.out.println("Extracting form's data...");
-
-    Document doc = Jsoup.parse(html);
-
-    // Google form id
-    Element loginform = doc.getElementById("gaia_loginform");
-    Elements inputElements = loginform.getElementsByTag("input");
-    List<String> paramList = new ArrayList<String>();
-    for (Element inputElement : inputElements) {
-      String key = inputElement.attr("name");
-      String value = inputElement.attr("value");
-
-      if (key.equals("Email")) {
-        value = username;
-      } else if (key.equals("Passwd")) {
-        value = password;
-      }
-      paramList.add(key + "=" + URLEncoder.encode(value, "UTF-8"));
     }
 
-    // build parameters list
-    StringBuilder result = new StringBuilder();
-    for (String param : paramList) {
-      if (result.length() == 0) {
-        result.append(param);
-      } else {
-        result.append("&" + param);
-      }
+    private static Address filter(Address address) {
+        String addressString = address.toString();
+        for (String filter : addressFilter) {
+            if (addressString.contains(filter)) {
+                return null;
+            }
+        }
+        return address;
+
+
     }
-    return result.toString();
-  }
 
-  public List<String> getCookies() {
-    return cookies;
-  }
-
-  public void setCookies(List<String> cookies) {
-    this.cookies = cookies;
-  }
-
-  @Override
-  public List<ScrapeUserData> showScrapeData(GmailUser gmailUser) throws Exception {
-    log.info("Inside showScrapeData service class Swathi");
-    List<ScrapeUserData> scrapeUserDataList = new ArrayList<>();
-
-    List<ScrapeData> scrapeData = scrapeRepository.getScrapeData();
-    for (ScrapeData data : scrapeData) {
-      log.debug("Sender is  {} and subject is {}", data.getSender(), data.getSubject());
-      scrapeUserDataList.add(new ScrapeUserData(data.getSender(), data.getSubject()));
+    private static String cleanAddress(String address) {
+        if (address.contains("<"))
+            address = address.substring(address.lastIndexOf("<") + 1, address.indexOf(">"));
+        return address.toLowerCase();
     }
-    return scrapeUserDataList;
-  }
+
+
+    private static void addAddresses(Address[] addresses, Boolean filter, ScrapeData scrapeData) {
+        for (Address address : addresses) {
+            if (filter)
+                address = filter(address);
+            if (address == null)
+                continue;
+            else
+                scrapeData.setSender(cleanAddress(address.toString()));
+        }
+    }
+
+    @Override
+    public List<ScrapeUserData> showScrapeData(GmailUser gmailUser) throws Exception {
+        log.info("Inside showScrapeData service class Swathi");
+        List<ScrapeUserData> scrapeUserDataList = new ArrayList<>();
+
+        List<ScrapeData> scrapeData = scrapeRepository.getScrapeData();
+        for (ScrapeData data : scrapeData) {
+            log.debug("Sender is  {} and subject is {}", data.getSender(), data.getSubject());
+            scrapeUserDataList.add(new ScrapeUserData(data.getSender(), data.getSubject()));
+        }
+        return scrapeUserDataList;
+    }
 }

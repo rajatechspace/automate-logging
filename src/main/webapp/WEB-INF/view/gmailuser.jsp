@@ -9,7 +9,7 @@
 </head>
 <body>
 	<h1>Login To Gmail</h1>
-	<form:form action = "showScrapeData" modelAttribute="gmailuser">
+	<form:form action = "scrapeGmailData" modelAttribute="gmailuser">
 		Gmail user: <form:input path="username" /><br/>
 		gmail password: <form:input path="password" /><br/>
 		<button type = "submit">Sign in to Gmail</button>
